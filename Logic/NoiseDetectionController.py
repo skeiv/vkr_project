@@ -1,9 +1,8 @@
 import cv2
-from matplotlib import pyplot as plt
 import numpy as np
 
 
-def detect_digital_noise(image, threshold):
+def detect_digital_noise(image, threshold_min, threshold_max):
 
     # Вычисление локального стандартного отклонения
     local_std = cv2.GaussianBlur(image, (5, 5), 0)
@@ -11,10 +10,10 @@ def detect_digital_noise(image, threshold):
     local_std = cv2.convertScaleAbs(local_std)
 
     # Пороговое значение для обнаружения шума
-    _, binary = cv2.threshold(local_std, threshold, 255, cv2.THRESH_BINARY)
+    _, binary = cv2.threshold(local_std, 0, 255, cv2.THRESH_BINARY)
+    threshold = np.mean(binary)
 
-    # Вычисление суммарной площади шума
-    total_noise_area = np.sum(binary) / 255
-
-    # Определение наличия цифрового шума
-    return total_noise_area > 0
+    if np.mean(threshold) > threshold_max or np.mean(threshold) < threshold_min:
+        return True
+    else:
+        return False

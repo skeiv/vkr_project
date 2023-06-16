@@ -1,16 +1,44 @@
-import Logic.NoiseDetectionController as noiseDetectionController
+import Logic.SkippingAndRepeatingFramesController as sarfController
+import Logic.UploadOriginalVideoController as uovController
+import Logic.PreparationVideoController as pvController
 import tkinter as tk
 from tkinter import *
 from tkinter import messagebox
 from tkinter import scrolledtext
 from tkinter.filedialog import asksaveasfilename
 from tkinter.filedialog import askopenfilename
-import numpy as np
-import cv2
 
 
+originalVideo = ''
 video = ''
 
+def getOriginalPathTest():
+    global originalVideo
+    originalVideo = askopenfilename()
+    str = originalVideo.split('/')
+    get_orig_path_label.config(text=f'Выбран: {str[-1]}')
+    uploadVideo()
+
+def uploadVideo():
+    if(originalVideo == ''):
+        messagebox.showwarning("Ошибка", "Выберите видеофайл")
+        return
+    notes_text.insert(tk.END, "Загрузка видео...\n")
+    flow_min_threshold_var, flow_max_threshold_var, local_min_threshold_var, local_max_threshold_var = uovController.analyze_video(originalVideo)
+    # Вывод сообщений
+    notes_text.insert(tk.END, "Загрузка видео прошла успешно\n")
+    notes_text.insert(tk.END, flow_min_threshold_var.__str__() + "\n")
+    notes_text.insert(tk.END, flow_max_threshold_var.__str__() + "\n")
+    notes_text.insert(tk.END, local_min_threshold_var.__str__() + "\n")
+    notes_text.insert(tk.END, local_max_threshold_var.__str__() + "\n")
+    flow_min_threshold_entry.delete(0, tk.END)
+    flow_min_threshold_entry.insert(0, flow_min_threshold_var)
+    flow_max_threshold_entry.delete(0, tk.END)
+    flow_max_threshold_entry.insert(0, flow_max_threshold_var)
+    local_min_threshold_entry.delete(0, tk.END)
+    local_min_threshold_entry.insert(0, local_min_threshold_var)
+    local_max_threshold_entry.delete(0, tk.END)
+    local_max_threshold_entry.insert(0, local_max_threshold_var)
 
 def getPathTest():
     global video
@@ -25,7 +53,8 @@ def start():
     try:
         flow_min_threshold = float(flow_min_threshold_var.get())
         flow_max_threshold = float(flow_max_threshold_var.get())
-        fourier_threshold = float(fourier_threshold_var.get())
+        local_min_threshold = float(local_min_threshold_var.get())
+        local_max_threshold = float(local_max_threshold_var.get())
     except:
         messagebox.showwarning("Ошибка", "Данные в полях для ввода должны быть действительными числами")
         return
@@ -36,7 +65,9 @@ def start():
     # Вывод сообщений
     notes_text.insert(tk.END, "Выполняется...\n")
 
-    detect_duplicates_and_gaps(video, flow_min_threshold, flow_max_threshold, fourier_threshold)
+    pvController.Preparation(video)
+    notes_text.insert(tk.END, sarfController.detect_duplicates_and_gaps(flow_min_threshold, flow_max_threshold,
+                                                                        local_min_threshold, local_max_threshold))
 
 def exportToFile():
     file_path = asksaveasfilename(defaultextension=".txt", filetypes=[("Text Files", "*.txt")])
@@ -52,103 +83,6 @@ def exportToFile():
 def finish():
     window.destroy()  # ручное закрытие окна и всего приложения
 
-def add_log_message(message):
-    notes_text.insert(tk.END, message + '\n')
-
-def detect_duplicates_and_gaps(video_path, flow_min_threshold, flow_max_threshold, fourier_threshold):
-
-    cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    add_log_message(f'Количество кадров в секунду: {round(fps, 2)}')
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    while not cap.isOpened():
-        cap = cv2.VideoCapture(video_path)
-        cv2.waitKey(1000)
-
-    # Читаем первый кадр и инициализируем переменные
-    ret, prev_frame = cap.read()
-    prev_frame_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
-    frame_index = 0
-    duplicate_start = 0
-    duplicate_end = 0
-    gap_start = 0
-    gap_end = 0
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    isGap = False
-    isDuplicate = False
-
-    while True:
-        errStr = ''
-        # Преобразуем кадр в изображение
-        image = cv2.cvtColor(prev_frame, cv2.IMREAD_GRAYSCALE)
-        if(noiseDetectionController.detect_digital_noise(image, fourier_threshold)):
-            add_log_message(f'Обнаружен дефект. Кадр: {frame_index}')
-            errStr = 'Defect detecting'
-        # Читаем следующий кадр
-        ret, curr_frame = cap.read()
-
-        if not ret:
-            break
-
-        position = (10, height - 10)
-        cv2.putText(image, # numpy array on which text is written
-                     f'{frame_index}/{frame_count} {errStr}',#text
-                     position, #position at which writing has to start
-                     cv2.FONT_HERSHEY_SIMPLEX, #font family
-                     1, #font size
-                     (200, 200, 200, 255), #font color
-                     3) #font stroke
-
-        # Показываем видео
-        cv2.namedWindow('Video', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('Video', width // 2, height // 2)
-        cv2.imshow("Video", image)
-
-        curr_frame_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
-
-        # Вычисляем оптический поток между текущим и предыдущим кадрами
-        flow = cv2.calcOpticalFlowFarneback(prev_frame_gray, curr_frame_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-
-        # Вычисляем среднюю величину оптического потока для кадра
-        flow_mean = np.mean(np.abs(flow))
-
-        if flow_mean < flow_min_threshold and not isDuplicate:
-            duplicate_start = frame_index
-            isDuplicate = True
-
-        if flow_mean > flow_min_threshold and isDuplicate:
-            duplicate_end = frame_index
-            isDuplicate = False
-            add_log_message(f'Возможный повтор кадров: кадры {duplicate_start}-{duplicate_end}')
-
-        if flow_mean > flow_max_threshold and not isGap:
-            gap_start = frame_index
-            isGap = True
-
-        if flow_mean <flow_max_threshold and isGap:
-            gap_end = frame_index
-            isGap = False
-            add_log_message(f'Возможный пропуск кадров: кадры {gap_start}-{gap_end}')
-
-        # Обновляем предыдущий кадр и индекс
-        prev_frame_gray = curr_frame_gray
-        prev_frame = curr_frame
-        print(frame_index)
-        frame_index += 1
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-        # Проверяем состояние окна и выходим из цикла, если окно закрыто
-        if cv2.getWindowProperty('Video', cv2.WND_PROP_VISIBLE) < 1:
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
 global window
 window = tk.Tk()
 window.title("vkr")
@@ -157,38 +91,53 @@ window.protocol("WM_DELETE_WINDOW", finish)
 
 # Создание переменных для значений переменных
 global flow_min_threshold_var
-flow_min_threshold_var = tk.StringVar(value="0.17")
+flow_min_threshold_var = tk.StringVar(value="0.1")
 global flow_max_threshold_var
-flow_max_threshold_var = tk.StringVar(value="0.49")
-global fourier_threshold_var
-fourier_threshold_var = tk.StringVar(value="100.0")
+flow_max_threshold_var = tk.StringVar(value="0.5")
+global local_min_threshold_var
+local_min_threshold_var = tk.StringVar(value="0.0")
+global local_max_threshold_var
+local_max_threshold_var = tk.StringVar(value="100.0")
 
 # Создание левой части окна
 left_frame = tk.Frame(window)
 left_frame.grid(row=0, column=0, padx=10, pady=10)
 
 # Создание кнопки "Получить путь"
-get_path_button = tk.Button(left_frame, text="Выберите видеофайл", command=getPathTest)
+get_path_button = tk.Button(left_frame, text="Выберите оригинальный видеофайл", command=getOriginalPathTest)
 get_path_button.grid(row=0, column=0, pady=10)
+global get_orig_path_label
+get_orig_path_label = Label(left_frame, text="Видеофайл не выбран")
+get_orig_path_label.grid(column=1, row=0, pady=10)
+
+# Создание кнопки "Получить путь"
+get_path_button = tk.Button(left_frame, text="Выберите тестируемый видеофайл", command=getPathTest)
+get_path_button.grid(row=1, column=0, pady=10)
 global get_path_label
 get_path_label = Label(left_frame, text="Видеофайл не выбран")
-get_path_label.grid(column=1, row=0, pady=10)
+get_path_label.grid(column=1, row=1, pady=10)
 
 # Создание полей для ввода переменных
 flow_min_threshold_label = tk.Label(left_frame, text="flow_min_threshold:")
-flow_min_threshold_label.grid(row=1, column=0, sticky=tk.W)
+flow_min_threshold_label.grid(row=2, column=0, sticky=tk.W)
 flow_min_threshold_entry = tk.Entry(left_frame, textvariable=flow_min_threshold_var)
-flow_min_threshold_entry.grid(row=1, column=1, pady=5)
+flow_min_threshold_entry.grid(row=2, column=1, pady=5)
 
 flow_max_threshold_label = tk.Label(left_frame, text="flow_max_threshold:")
-flow_max_threshold_label.grid(row=2, column=0, sticky=tk.W)
+flow_max_threshold_label.grid(row=3, column=0, sticky=tk.W)
 flow_max_threshold_entry = tk.Entry(left_frame, textvariable=flow_max_threshold_var)
-flow_max_threshold_entry.grid(row=2, column=1, pady=5)
+flow_max_threshold_entry.grid(row=3, column=1, pady=5)
 
-fourier_threshold_label = tk.Label(left_frame, text="fourier_threshold:")
-fourier_threshold_label.grid(row=3, column=0, sticky=tk.W)
-fourier_threshold_entry = tk.Entry(left_frame, textvariable=fourier_threshold_var)
-fourier_threshold_entry.grid(row=3, column=1, pady=5)
+local_min_threshold_label = tk.Label(left_frame, text="local_min_threshold_var:")
+local_min_threshold_label.grid(row=4, column=0, sticky=tk.W)
+local_min_threshold_entry = tk.Entry(left_frame, textvariable=local_min_threshold_var)
+local_min_threshold_entry.grid(row=4, column=1, pady=5)
+
+local_max_threshold_label = tk.Label(left_frame, text="local_max_threshold_var:")
+local_max_threshold_label.grid(row=5, column=0, sticky=tk.W)
+local_max_threshold_entry = tk.Entry(left_frame, textvariable=local_max_threshold_var)
+local_max_threshold_entry.grid(row=5, column=1, pady=5)
+
 
 # Создание нижней части окна
 bottom_frame = tk.Frame(window)

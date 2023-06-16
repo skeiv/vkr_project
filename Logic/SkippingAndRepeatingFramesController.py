@@ -1,40 +1,60 @@
 import cv2
 import numpy as np
+import os
 import Logic.NoiseDetectionController as noiseDetectionController
-import main
 
 
-def detect_duplicates_and_gaps(video_path, flow_min_threshold, flow_max_threshold, fourier_threshold):
+def add_log_message(message, notes=None):
+    return notes + message + '\n'
 
-    cap = cv2.VideoCapture(video_path)
+
+def detect_duplicates_and_gaps(flow_min_threshold, flow_max_threshold, local_min_threshold, local_max_threshold):
+    notes = ''
+    cap = cv2.VideoCapture('temp.mp4')
     fps = cap.get(cv2.CAP_PROP_FPS)
+    notes = add_log_message(f'Количество кадров в секунду: {round(fps, 2)}', notes)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    while not cap.isOpened():
-        cap = cv2.VideoCapture(video_path)
-        cv2.waitKey(1000)
+    if not cap.isOpened():
+        cap = cv2.VideoCapture('temp.mp4')
+        return 'Ошибка'
 
     # Читаем первый кадр и инициализируем переменные
     ret, prev_frame = cap.read()
     prev_frame_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
     frame_index = 0
-    duplicates = []
-    gaps = []
+    duplicate_start = 0
+    duplicate_end = 0
+    gap_start = 0
+    gap_end = 0
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    isGap = False
+    isDuplicate = False
 
     while True:
-        if(noiseDetectionController.detect_digital_noise(prev_frame, fourier_threshold)):
-            main.add_log_message(f'Обнаружен дефект. Кадр: {frame_index}')
+        errStr = ''
+        # Преобразуем кадр в изображение
+        image = cv2.cvtColor(prev_frame, cv2.IMREAD_GRAYSCALE)
         # Читаем следующий кадр
         ret, curr_frame = cap.read()
 
-        main.update_progress(round(frame_index / fps) * 100)
         if not ret:
             break
 
-        # Преобразуем кадр в изображение
-        image = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2RGB)
+        if(noiseDetectionController.detect_digital_noise(curr_frame, local_min_threshold, local_max_threshold)):
+            notes = add_log_message(f'Обнаружен дефект. Кадр: {frame_index}', notes)
+            errStr = 'Defect detecting'
+
+        position = (10, height - 10)
+        cv2.putText(image, # numpy array on which text is written
+                     f'{frame_index}/{frame_count} {errStr}',#text
+                     position, #position at which writing has to start
+                     cv2.FONT_HERSHEY_SIMPLEX, #font family
+                     1, #font size
+                     (200, 200, 200, 255), #font color
+                     3) #font stroke
 
         # Показываем видео
         cv2.namedWindow('Video', cv2.WINDOW_NORMAL)
@@ -49,16 +69,27 @@ def detect_duplicates_and_gaps(video_path, flow_min_threshold, flow_max_threshol
         # Вычисляем среднюю величину оптического потока для кадра
         flow_mean = np.mean(np.abs(flow))
 
-        # Если средняя величина потока близка к нулю, это может быть дубликат кадра
-        if flow_mean < flow_min_threshold:
-            duplicates.append(frame_index)
+        if flow_mean < flow_min_threshold and not isDuplicate:
+            duplicate_start = frame_index
+            isDuplicate = True
 
-        # Если кадр был пропущен (сильные движения)
-        if flow_mean > flow_max_threshold:
-            gaps.append(frame_index)
+        if flow_mean > flow_min_threshold and isDuplicate:
+            duplicate_end = frame_index
+            isDuplicate = False
+            notes = add_log_message(f'Возможный повтор кадров: кадры {duplicate_start}-{duplicate_end}', notes)
+
+        if flow_mean > flow_max_threshold and not isGap:
+            gap_start = frame_index
+            isGap = True
+
+        if flow_mean <flow_max_threshold and isGap:
+            gap_end = frame_index
+            isGap = False
+            notes = add_log_message(f'Возможный пропуск кадров: кадры {gap_start}-{gap_end}', notes)
 
         # Обновляем предыдущий кадр и индекс
         prev_frame_gray = curr_frame_gray
+        prev_frame = curr_frame
         print(frame_index)
         frame_index += 1
 
@@ -72,4 +103,6 @@ def detect_duplicates_and_gaps(video_path, flow_min_threshold, flow_max_threshol
     cap.release()
     cv2.destroyAllWindows()
 
-    return duplicates, gaps
+    os.remove('temp.mp4')
+
+    return notes
